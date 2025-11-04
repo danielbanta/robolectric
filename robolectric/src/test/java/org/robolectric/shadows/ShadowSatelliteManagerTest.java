@@ -15,7 +15,13 @@ import android.os.RemoteException;
 import android.telephony.satellite.SatelliteManager;
 import android.telephony.satellite.SatelliteManager.SatelliteException;
 import android.telephony.satellite.SatelliteModemStateCallback;
+import android.telephony.satellite.SatelliteSubscriberInfo;
+import android.telephony.satellite.SatelliteSubscriberProvisionStatus;
 import androidx.test.core.app.ApplicationProvider;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Test;
@@ -213,6 +219,119 @@ public class ShadowSatelliteManagerTest {
     assertThrows(Exception.class, this::requestIsCommunicationAllowedForCurrentLocation);
   }
 
+  @Test
+  public void registerForSupportedStateChanged_callbackIsTriggered() {
+    SatelliteManager satelliteManager = context.getSystemService(SatelliteManager.class);
+    AtomicReference<Boolean> isSupported = new AtomicReference<>();
+    java.util.function.Consumer<Boolean> callback = isSupported::set;
+
+    int result = satelliteManager.registerForSupportedStateChanged(directExecutor(), callback);
+    assertThat(result).isEqualTo(SATELLITE_RESULT_SUCCESS);
+
+    getShadowSatelliteManager().triggerOnSupportedStateChanged(true);
+    assertThat(isSupported.get()).isTrue();
+
+    getShadowSatelliteManager().triggerOnSupportedStateChanged(false);
+    assertThat(isSupported.get()).isFalse();
+  }
+
+  @Test
+  public void unregisterForSupportedStateChanged_unregistersCallback() {
+    SatelliteManager satelliteManager = context.getSystemService(SatelliteManager.class);
+    AtomicBoolean wasCalled = new AtomicBoolean(false);
+    java.util.function.Consumer<Boolean> callback = supported -> wasCalled.set(true);
+    satelliteManager.registerForSupportedStateChanged(directExecutor(), callback);
+
+    satelliteManager.unregisterForSupportedStateChanged(callback);
+    getShadowSatelliteManager().triggerOnSupportedStateChanged(true);
+
+    assertThat(wasCalled.get()).isFalse();
+  }
+
+  @Test
+  public void triggerOnSupportedStateChanged_triggersAllCallbacks() {
+    SatelliteManager satelliteManager = context.getSystemService(SatelliteManager.class);
+    AtomicReference<Boolean> callback1Result = new AtomicReference<>();
+    AtomicReference<Boolean> callback2Result = new AtomicReference<>();
+    java.util.function.Consumer<Boolean> callback1 = callback1Result::set;
+    java.util.function.Consumer<Boolean> callback2 = callback2Result::set;
+
+    satelliteManager.registerForSupportedStateChanged(directExecutor(), callback1);
+    satelliteManager.registerForSupportedStateChanged(directExecutor(), callback2);
+
+    getShadowSatelliteManager().triggerOnSupportedStateChanged(true);
+
+    assertThat(callback1Result.get()).isTrue();
+    assertThat(callback2Result.get()).isTrue();
+  }
+
+  @Test
+  public void requestSatelliteSubscriberProvisionStatus_returnsNullByDefault() throws Exception {
+    assertThat(requestSatelliteSubscriberProvisionStatus()).isNull();
+  }
+
+  @Test
+  public void requestSatelliteSubscriberProvisionStatus_whenSet_returnsStatus() throws Exception {
+    List<SatelliteSubscriberProvisionStatus> provisionStatus = new ArrayList<>();
+    provisionStatus.add(
+        new SatelliteSubscriberProvisionStatus.Builder()
+            .setSatelliteSubscriberInfo(
+                new SatelliteSubscriberInfo.Builder()
+                    .setSubscriptionId(1)
+                    .setSubscriberId("test-subscriber-id")
+                    .setNiddApn("test-nidd-apn")
+                    .build())
+            .setProvisioned(true)
+            .build());
+    getShadowSatelliteManager().setSatelliteSubscriberProvisionStatus(provisionStatus, null);
+
+    assertThat(requestSatelliteSubscriberProvisionStatus()).isEqualTo(provisionStatus);
+  }
+
+  @Test
+  public void requestSatelliteSubscriberProvisionStatus_whenSetToError_throws() {
+    getShadowSatelliteManager()
+        .setSatelliteSubscriberProvisionStatus(null, new SatelliteException(123));
+
+    assertThrows(Exception.class, this::requestSatelliteSubscriberProvisionStatus);
+  }
+
+  @Test
+  public void getAttachRestrictionReasonsForCarrier_returnsEmptySetByDefault() {
+    SatelliteManager satelliteManager = context.getSystemService(SatelliteManager.class);
+    assertThat(satelliteManager.getAttachRestrictionReasonsForCarrier(1)).isEmpty();
+  }
+
+  @Test
+  public void getAttachRestrictionReasonsForCarrier_whenSet_returnsReasons() {
+    SatelliteManager satelliteManager = context.getSystemService(SatelliteManager.class);
+    ShadowSatelliteManager shadowSatelliteManager = Shadow.extract(satelliteManager);
+    Set<Integer> reasons = new HashSet<>();
+    reasons.add(1);
+    reasons.add(2);
+    shadowSatelliteManager.setAttachRestrictionReasonsForCarrier(1, reasons);
+
+    assertThat(satelliteManager.getAttachRestrictionReasonsForCarrier(1)).isEqualTo(reasons);
+    assertThat(satelliteManager.getAttachRestrictionReasonsForCarrier(2)).isEmpty();
+  }
+
+  @Test
+  public void getSatelliteDataOptimizedApps_returnsEmptyListByDefault() {
+    SatelliteManager satelliteManager = context.getSystemService(SatelliteManager.class);
+    assertThat(satelliteManager.getSatelliteDataOptimizedApps()).isEmpty();
+  }
+
+  @Test
+  public void getSatelliteDataOptimizedApps_whenSet_returnsApps() {
+    SatelliteManager satelliteManager = context.getSystemService(SatelliteManager.class);
+    ShadowSatelliteManager shadowSatelliteManager = Shadow.extract(satelliteManager);
+    List<String> apps = new ArrayList<>();
+    apps.add("com.google.android.apps.messaging");
+    shadowSatelliteManager.setSatelliteDataOptimizedApps(apps);
+
+    assertThat(satelliteManager.getSatelliteDataOptimizedApps()).isEqualTo(apps);
+  }
+
   private boolean requestIsCommunicationAllowedForCurrentLocation() throws Exception {
     AtomicBoolean isCommunicationAllowedForCurrentLocation = new AtomicBoolean(false);
     // Declared as Exception to work around NoClassDefFoundError relating to SatelliteException's
@@ -237,6 +356,31 @@ public class ShadowSatelliteManagerTest {
       throw error.get();
     }
     return isCommunicationAllowedForCurrentLocation.get();
+  }
+
+  private List<SatelliteSubscriberProvisionStatus> requestSatelliteSubscriberProvisionStatus()
+      throws Exception {
+    AtomicReference<List<SatelliteSubscriberProvisionStatus>> status = new AtomicReference<>();
+    AtomicReference<Exception> error = new AtomicReference<>();
+    OutcomeReceiver<List<SatelliteSubscriberProvisionStatus>, SatelliteException> callback =
+        new OutcomeReceiver<List<SatelliteSubscriberProvisionStatus>, SatelliteException>() {
+          @Override
+          public void onResult(List<SatelliteSubscriberProvisionStatus> result) {
+            status.set(result);
+          }
+
+          @Override
+          public void onError(SatelliteException e) {
+            error.set(e);
+          }
+        };
+
+    getShadowSatelliteManager()
+        .requestSatelliteSubscriberProvisionStatus(directExecutor(), callback);
+    if (error.get() != null) {
+      throw error.get();
+    }
+    return status.get();
   }
 
   private ShadowSatelliteManager getShadowSatelliteManager() {
